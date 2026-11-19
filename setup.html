@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Quedadas · preparar base de datos</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛠️</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .setup-log { list-style: none; padding: 0; margin: 1rem 0 0; font-size: .9rem; }
+    .setup-log li { padding: .25rem 0; border-top: 1px solid var(--line); }
+    .setup-log li.ok::before { content: "✅ "; }
+    .setup-log li.err::before { content: "❌ "; }
+    .setup-log li.info::before { content: "⏳ "; }
+    .done { background: var(--on-bg); color: var(--on-ink); padding: .8rem 1rem; border-radius: 10px; margin-top: 1rem; }
+    code { font-size: .85em; word-break: break-all; }
+  </style>
+  <script src="config.js"></script>
+  <script type="module" src="setup.js"></script>
+</head>
+<body>
+  <section class="lobby">
+    <form id="setup-form" class="lobby-card" style="width:min(520px,100%)" autocomplete="off">
+      <div class="logo" aria-hidden="true">🛠️</div>
+      <h1>Preparar la base de datos</h1>
+      <p class="muted">Solo hay que hacerlo una vez. Crea las tablas y los permisos en tu proyecto de Nhost.</p>
+      <p id="target" class="note"></p>
+
+      <label for="secret">Admin Secret de Nhost</label>
+      <input id="secret" type="password" placeholder="Pega aquí el Admin Secret" required>
+      <p class="muted" style="font-size:.8rem;margin:.4rem 0 0">No se guarda en ningún sitio: solo se usa en esta pestaña para preparar la base de datos.</p>
+
+      <button id="go" type="submit" class="btn primary wide">Preparar base de datos</button>
+      <ul id="log" class="setup-log"></ul>
+      <div id="done" class="done" hidden>
+        <strong>¡Listo!</strong> Ya puedes cerrar esta página y abrir <a href="./">la app</a>.
+      </div>
+    </form>
+  </section>
+</body>
+</html>

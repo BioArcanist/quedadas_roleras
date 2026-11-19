@@ -1,73 +1,128 @@
-// Capa de datos: Supabase (compartido entre amigos) o localStorage (modo demo).
+// Capa de datos: Nhost (compartido entre amigos) o localStorage (modo demo).
 export const SLOTS = ['manana', 'tarde', 'noche'];
 
 export async function createStore(config = {}) {
-  if (config.supabaseUrl && config.supabaseAnonKey) {
-    return supabaseStore(config.supabaseUrl, config.supabaseAnonKey);
+  if (config.nhostSubdomain && config.nhostRegion) {
+    return nhostStore(config.nhostSubdomain, config.nhostRegion);
   }
   return localStore();
 }
 
-/* ---------------------------------------------------------------- Supabase */
-async function supabaseStore(url, key) {
-  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  const sb = createClient(url, key, { auth: { persistSession: false } });
-  const ok = ({ data, error }) => { if (error) throw error; return data; };
+export function nhostUrls(subdomain, region) {
+  return {
+    graphql: `https://${subdomain}.graphql.${region}.nhost.run/v1`,
+    graphqlWs: `wss://${subdomain}.graphql.${region}.nhost.run/v1`,
+    hasura: `https://${subdomain}.hasura.${region}.nhost.run`,
+  };
+}
+
+/* ------------------------------------------------------------------- Nhost */
+function nhostStore(subdomain, region) {
+  const urls = nhostUrls(subdomain, region);
+
+  async function gql(query, variables = {}) {
+    const res = await fetch(urls.graphql, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.errors?.length) {
+      const e = json.errors[0];
+      const err = new Error(e.message);
+      const code = e.extensions?.code;
+      err.code = code === 'constraint-violation' && /unique|duplicate/i.test(e.message) ? '23505' : code;
+      throw err;
+    }
+    return json.data;
+  }
 
   return {
-    mode: 'supabase',
+    mode: 'nhost',
 
     async listPeople() {
-      return ok(await sb.from('people').select('id,name').order('name'));
+      return (await gql('query { people(order_by: {name: asc}) { id name } }')).people;
     },
     async createPerson(name) {
-      return ok(await sb.from('people').insert({ name }).select('id,name').single());
+      return (await gql('mutation ($name: String!) { insert_people_one(object: {name: $name}) { id name } }',
+        { name })).insert_people_one;
     },
 
     async listTags() {
-      return ok(await sb.from('tags').select('id,name,color').order('created_at'));
+      return (await gql('query { tags(order_by: {created_at: asc}) { id name color } }')).tags;
     },
     async createTag(name, color) {
-      return ok(await sb.from('tags').insert({ name, color }).select('id,name,color').single());
+      return (await gql('mutation ($name: String!, $color: String!) { insert_tags_one(object: {name: $name, color: $color}) { id name color } }',
+        { name, color })).insert_tags_one;
     },
     async deleteTag(id) {
-      ok(await sb.from('tags').delete().eq('id', id));
+      await gql('mutation ($id: uuid!) { delete_tags_by_pk(id: $id) { id } }', { id });
     },
 
     async listAvailability(tagId, fromDay, toDay) {
-      const out = [];
-      const PAGE = 1000;
-      for (let from = 0; ; from += PAGE) {
-        const rows = ok(await sb.from('availability')
-          .select('person_id,day,slot')
-          .eq('tag_id', tagId).gte('day', fromDay).lte('day', toDay)
-          .order('day').order('person_id').order('slot')
-          .range(from, from + PAGE - 1));
-        out.push(...rows);
-        if (rows.length < PAGE) break;
-      }
-      return out;
+      return (await gql(`query ($tag: uuid!, $from: date!, $to: date!) {
+        availability(where: {tag_id: {_eq: $tag}, day: {_gte: $from, _lte: $to}}) { person_id day slot }
+      }`, { tag: tagId, from: fromDay, to: toDay })).availability;
     },
     async setSlot(personId, tagId, day, slot, available) {
-      const row = { person_id: personId, tag_id: tagId, day, slot };
+      const v = { p: personId, t: tagId, d: day, s: slot };
       if (available) {
-        ok(await sb.from('availability').upsert(row, {
-          onConflict: 'person_id,tag_id,day,slot', ignoreDuplicates: true,
-        }));
+        try {
+          await gql(`mutation ($p: uuid!, $t: uuid!, $d: date!, $s: String!) {
+            insert_availability_one(object: {person_id: $p, tag_id: $t, day: $d, slot: $s}) { slot }
+          }`, v);
+        } catch (e) {
+          if (e.code !== '23505') throw e; // ya estaba marcado: no pasa nada
+        }
       } else {
-        ok(await sb.from('availability').delete().match(row));
+        await gql(`mutation ($p: uuid!, $t: uuid!, $d: date!, $s: String!) {
+          delete_availability(where: {person_id: {_eq: $p}, tag_id: {_eq: $t}, day: {_eq: $d}, slot: {_eq: $s}}) { affected_rows }
+        }`, v);
       }
     },
 
+    // Tiempo real: una suscripción a un contador que sube con cada cambio.
+    // Si el websocket falla, se recarga cada 30 s y al volver a la pestaña.
     subscribe(cb) {
-      sb.channel('quedadas')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'people' }, () => cb('people'))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'tags' }, () => cb('tags'))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'availability' }, () => cb('availability'))
-        .subscribe();
+      const all = () => { cb('people'); cb('tags'); cb('availability'); };
+      let lastN = null;
+      let retry = 1000;
+
+      const connect = () => {
+        let ws;
+        try { ws = new WebSocket(urls.graphqlWs, 'graphql-ws'); } catch { return; }
+        ws.onopen = () => {
+          retry = 1000;
+          ws.send(JSON.stringify({ type: 'connection_init', payload: {} }));
+        };
+        ws.onmessage = (ev) => {
+          let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+          if (msg.type === 'connection_ack') {
+            ws.send(JSON.stringify({
+              id: '1', type: 'start',
+              payload: { query: 'subscription { revision_by_pk(id: 1) { n } }' },
+            }));
+          } else if (msg.type === 'data') {
+            const n = msg.payload?.data?.revision_by_pk?.n;
+            if (n == null) return;
+            if (lastN !== null && n !== lastN) all();
+            lastN = n;
+          }
+        };
+        ws.onclose = () => {
+          setTimeout(connect, retry);
+          retry = Math.min(retry * 2, 30000);
+        };
+      };
+      connect();
+
+      setInterval(() => { if (!document.hidden) all(); }, 30000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) all(); });
     },
   };
 }
+
 
 /* ---------------------------------------------------------- Demo (local) */
 function localStore() {

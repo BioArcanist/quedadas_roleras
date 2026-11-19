@@ -56,7 +56,7 @@ const currentTag = () => state.tags.find(t => t.id === state.tagId) || null;
 /* ------------------------------------------------------------------ boot */
 boot().catch(err => {
   console.error(err);
-  $('#loading').textContent = 'No se ha podido conectar con la base de datos. Revisa la configuración de Supabase.';
+  $('#loading').textContent = 'No se ha podido conectar con la base de datos. Revisa la configuración de Nhost (config.js) o si el proyecto está en pausa.';
 });
 
 async function boot() {
@@ -64,7 +64,7 @@ async function boot() {
   if (store.mode === 'local') {
     const note = $('#mode-note');
     note.hidden = false;
-    note.textContent = 'Modo demo: los datos solo se guardan en este navegador. Configura Supabase para compartir el calendario.';
+    note.textContent = 'Modo demo: los datos solo se guardan en este navegador. Configura Nhost para compartir el calendario.';
   }
   await refreshPeople();
   await refreshTags();
