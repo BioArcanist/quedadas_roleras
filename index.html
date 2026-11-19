@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quedadas · calendario de amigos</title>
+  <meta name="theme-color" content="#0f766e">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div id="loading" class="loading">Cargando…</div>
+
+  <!-- LOBBY -->
+  <section id="lobby" class="lobby" hidden>
+    <form id="lobby-form" class="lobby-card" autocomplete="off">
+      <div class="logo" aria-hidden="true">📅</div>
+      <h1>Quedadas</h1>
+      <p class="muted">Calendario compartido de disponibilidad</p>
+
+      <label for="lobby-select">¿Quién eres?</label>
+      <select id="lobby-select"></select>
+
+      <div id="lobby-new" hidden>
+        <label for="lobby-name">Tu nombre</label>
+        <input id="lobby-name" maxlength="30" placeholder="p. ej. Marta">
+      </div>
+
+      <button id="lobby-enter" type="submit" class="btn primary wide">Entrar</button>
+      <p id="lobby-error" class="error" hidden></p>
+      <p id="mode-note" class="note" hidden></p>
+    </form>
+  </section>
+
+  <!-- APP -->
+  <main id="app" hidden>
+    <header class="topbar">
+      <div class="brand">📅 Quedadas</div>
+      <div class="me">Eres <strong id="me-name"></strong> <button id="switch-user" class="link" type="button">Cambiar</button></div>
+    </header>
+
+    <section class="toolbar">
+      <div class="tag-picker">
+        <label for="tag-select">Tag</label>
+        <div class="tag-select-wrap">
+          <span class="tag-dot" id="tag-dot"></span>
+          <select id="tag-select"></select>
+        </div>
+        <button id="new-tag" class="btn" type="button">＋ Nuevo tag</button>
+        <button id="del-tag" class="btn ghost danger" type="button" title="Borrar este tag">Borrar</button>
+      </div>
+      <div class="month-nav">
+        <button id="prev" class="btn icon" type="button" aria-label="Mes anterior">‹</button>
+        <h2 id="month-label"></h2>
+        <button id="next" class="btn icon" type="button" aria-label="Mes siguiente">›</button>
+        <button id="today" class="btn" type="button">Hoy</button>
+      </div>
+    </section>
+
+    <div class="legend">
+      <span><i class="sw on"></i>Disponible</span>
+      <span><i class="sw off"></i>No disponible</span>
+      <span><i class="sw all"></i>Todos pueden</span>
+      <span class="hint">Pulsa un hueco para cambiarlo · arrastra con el ratón para marcar varios · pulsa el número del día para ver quién puede</span>
+    </div>
+
+    <div class="layout">
+      <div class="cal-wrap">
+        <div class="weekdays">
+          <span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span><span>Dom</span>
+        </div>
+        <div id="grid" class="grid"></div>
+        <div id="empty" class="empty" hidden>
+          <p>Todavía no hay ningún tag.</p>
+          <p>Crea uno (por ejemplo <em>Cena</em>, <em>Escapada</em> o <em>Partida</em>) para empezar a marcar disponibilidad.</p>
+          <button id="empty-new-tag" class="btn primary" type="button">＋ Crear tag</button>
+        </div>
+      </div>
+
+      <aside class="side">
+        <section class="panel" id="day-panel" hidden>
+          <h3 id="day-title"></h3>
+          <div id="day-slots"></div>
+          <div class="row-btns">
+            <button id="day-all" class="btn small" type="button">Todo el día disponible</button>
+            <button id="day-none" class="btn small ghost" type="button">Nada</button>
+          </div>
+        </section>
+        <section class="panel">
+          <h3>Mejores huecos <small class="muted">(este mes)</small></h3>
+          <ol id="best" class="best"></ol>
+        </section>
+        <section class="panel">
+          <h3>Grupo</h3>
+          <ul id="people" class="people"></ul>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <!-- Nuevo tag -->
+  <dialog id="tag-dialog">
+    <form id="tag-form" method="dialog">
+      <h3>Nuevo tag</h3>
+      <label for="tag-name">Nombre</label>
+      <input id="tag-name" maxlength="30" placeholder="p. ej. Cena de Navidad" required>
+      <label>Color</label>
+      <div id="tag-colors" class="swatches"></div>
+      <p id="tag-error" class="error" hidden></p>
+      <div class="row-btns end">
+        <button value="cancel" class="btn ghost" type="button" id="tag-cancel">Cancelar</button>
+        <button value="ok" class="btn primary" type="submit">Crear</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirmación -->
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h3 id="confirm-title">¿Seguro?</h3>
+      <p id="confirm-text"></p>
+      <div class="row-btns end">
+        <button value="cancel" class="btn ghost">Cancelar</button>
+        <button value="ok" class="btn danger-solid">Borrar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

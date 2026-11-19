@@ -1,0 +1,46 @@
+name: Desplegar en GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar web
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+        run: |
+          mkdir -p _site
+          cp index.html styles.css app.js store.js config.js _site/
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_ANON_KEY" ]; then
+            printf 'window.APP_CONFIG = { supabaseUrl: "%s", supabaseAnonKey: "%s" };\n' \
+              "$SUPABASE_URL" "$SUPABASE_ANON_KEY" > _site/config.js
+            echo "Config de Supabase inyectada desde las variables del repo."
+          else
+            echo "::warning::Sin SUPABASE_URL / SUPABASE_ANON_KEY: la web se publica en modo demo (datos solo locales)."
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
