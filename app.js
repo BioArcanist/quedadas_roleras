@@ -7,9 +7,6 @@ const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
   'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const WEEKDAYS_SHORT = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-const TAG_COLORS = ['#6366f1', '#0ea5e9', '#14b8a6', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444', '#64748b'];
-const LS_ME = 'quedadas.me';
-const LS_TAG = 'quedadas.tag';
 const NEW_PERSON = '__new__';
 
 const $ = (s) => document.querySelector(s);
@@ -34,97 +31,100 @@ function gridRange(cursor) {
 }
 
 /* ---------------------------------------------------------------- estado */
+const code = new URLSearchParams(location.search).get('g') || '';
 const state = {
-  people: [],
-  tags: [],
+  group: null,           // { id, name }
+  people: [],            // miembros del grupo
   me: null,
-  tagId: null,
   cursor: firstOfMonth(new Date()),
-  avail: new Map(),      // "YYYY-MM-DD|slot" -> Set(personId)
+  avail: new Map(),      // "YYYY-MM-DD|slot" -> Set(memberId)
   selectedDay: null,
 };
-const slotEls = new Map(); // "day|slot" -> button
+const slotEls = new Map();
 let store;
 let loadToken = 0;
 
+const meKey = () => `quedadas.me.${state.group.id}`;
 const key = (day, slot) => `${day}|${slot}`;
 const whoCan = (day, slot) => state.avail.get(key(day, slot)) || new Set();
 const isMine = (day, slot) => whoCan(day, slot).has(state.me);
 const personName = (id) => state.people.find(p => p.id === id)?.name ?? '¿?';
-const currentTag = () => state.tags.find(t => t.id === state.tagId) || null;
 
 /* ------------------------------------------------------------------ boot */
 boot().catch(err => {
   console.error(err);
-  $('#loading').textContent = 'No se ha podido conectar con la base de datos. Revisa la configuración de Nhost (config.js) o si el proyecto está en pausa.';
+  showGate('No se puede conectar',
+    'No se ha podido conectar con la base de datos. Si nadie la ha usado en una semana puede estar en pausa: avisa a quien organiza.');
 });
 
 async function boot() {
-  store = await createStore(window.APP_CONFIG || {});
-  if (store.mode === 'local') {
-    const note = $('#mode-note');
-    note.hidden = false;
-    note.textContent = 'Modo demo: los datos solo se guardan en este navegador. Configura Nhost para compartir el calendario.';
+  const adminHref = code ? `admin.html?from=${encodeURIComponent(code)}` : 'admin.html';
+  document.querySelectorAll('.admin-link').forEach(a => { a.href = adminHref; });
+
+  if (!code) return showGate();
+  store = createStore();
+  state.group = await store.getGroup(code);
+  if (!state.group) {
+    return showGate('Enlace no válido', 'Este enlace no existe o el grupo se ha borrado. Pide el enlace actual a quien organiza.');
   }
+  document.title = `${state.group.name} · Quedadas`;
+  document.querySelectorAll('.group-name').forEach(el => { el.textContent = state.group.name; });
+
   await refreshPeople();
-  await refreshTags();
   wireEvents();
-  store.subscribe(onRemoteChange);
+  store.subscribe(code, onRemoteChange);
   $('#loading').hidden = true;
 
-  const saved = lsGet(LS_ME);
+  // Recuerda quién eras en este grupo (o en la versión antigua de la app)
+  const saved = lsGet(meKey()) || lsGet('quedadas.me');
   if (saved && state.people.some(p => p.id === saved)) enterAs(saved);
   else showLobby();
 }
 
+function showGate(title, text) {
+  $('#loading').hidden = true;
+  if (title) $('#gate-title').textContent = title;
+  if (text) $('#gate-text').textContent = text;
+  $('#gate').hidden = false;
+}
+
 /* ---------------------------------------------------------- tiempo real */
-const pending = new Set();
 let pendingTimer = null;
-function onRemoteChange(kind) {
-  pending.add(kind);
+function onRemoteChange() {
   clearTimeout(pendingTimer);
   pendingTimer = setTimeout(async () => {
-    const kinds = new Set(pending); pending.clear();
     try {
-      if (kinds.has('people')) { await refreshPeople(); if (!$('#lobby').hidden) fillLobby(); }
-      if (kinds.has('tags')) await refreshTags();
-      if (state.me && (kinds.has('availability') || kinds.has('tags') || kinds.has('people'))) await loadAvailability();
+      await refreshPeople();
+      if (!$('#lobby').hidden) fillLobby();
+      if (state.me) {
+        if (!state.people.some(p => p.id === state.me)) { state.me = null; lsSet(meKey(), null); showLobby(); return; }
+        await loadAvailability();
+      }
     } catch (e) { console.error(e); }
   }, 250);
 }
 
 /* ----------------------------------------------------------------- datos */
 async function refreshPeople() {
-  state.people = await store.listPeople();
-}
-
-async function refreshTags() {
-  state.tags = await store.listTags();
-  if (!state.tags.some(t => t.id === state.tagId)) {
-    const saved = lsGet(LS_TAG);
-    state.tagId = state.tags.some(t => t.id === saved) ? saved : (state.tags[0]?.id ?? null);
-  }
-  renderTagPicker();
+  state.people = await store.listMembers(code);
 }
 
 async function loadAvailability() {
   const token = ++loadToken;
-  if (!state.tagId) { state.avail = new Map(); renderAll(); return; }
   const { start, end } = gridRange(state.cursor);
-  const rows = await store.listAvailability(state.tagId, ymd(start), ymd(end));
-  if (token !== loadToken) return; // llegó una respuesta más nueva
+  const rows = await store.listSlots(code, ymd(start), ymd(end));
+  if (token !== loadToken) return;
   const map = new Map();
   for (const r of rows) {
     const k = key(r.day, r.slot);
     if (!map.has(k)) map.set(k, new Set());
-    map.get(k).add(r.person_id);
+    map.get(k).add(r.member_id);
   }
   state.avail = map;
   renderAll();
 }
 
 async function setMine(day, slot, value) {
-  if (!state.tagId) return;
   const k = key(day, slot);
   let set = state.avail.get(k);
   if (!set) { set = new Set(); state.avail.set(k, set); }
@@ -132,15 +132,12 @@ async function setMine(day, slot, value) {
   value ? set.add(state.me) : set.delete(state.me);
   renderSlot(day, slot);
   scheduleSide();
-  const tagId = state.tagId;
   try {
-    await store.setSlot(state.me, tagId, day, slot, value);
+    await store.setSlot(code, state.me, day, slot, value);
   } catch (e) {
     console.error(e);
-    if (state.tagId === tagId) {
-      value ? set.delete(state.me) : set.add(state.me);
-      renderSlot(day, slot); scheduleSide();
-    }
+    value ? set.delete(state.me) : set.add(state.me);
+    renderSlot(day, slot); scheduleSide();
     toast('No se pudo guardar. ¿Hay conexión?');
   }
 }
@@ -155,7 +152,7 @@ function showLobby() {
 
 function fillLobby() {
   const sel = $('#lobby-select');
-  const prev = sel.value || lsGet(LS_ME) || '';
+  const prev = sel.value || lsGet(meKey()) || '';
   sel.innerHTML = '';
   sel.append(new Option('— Elige tu nombre —', ''));
   for (const p of state.people) sel.append(new Option(p.name, p.id));
@@ -181,111 +178,26 @@ async function onLobbySubmit(e) {
 
   const name = $('#lobby-name').value.trim().replace(/\s+/g, ' ');
   if (!name) { err.textContent = 'Escribe un nombre.'; err.hidden = false; return; }
-  const existing = state.people.find(p => p.name.toLowerCase() === name.toLowerCase());
-  if (existing) return enterAs(existing.id);
 
   const btn = $('#lobby-enter'); btn.disabled = true;
   try {
-    const p = await store.createPerson(name);
+    const p = await store.join(code, name); // si ya existe, devuelve el existente
     await refreshPeople();
     enterAs(p.id);
   } catch (e2) {
     console.error(e2);
-    if (e2?.code === '23505') {
-      await refreshPeople();
-      const p = state.people.find(x => x.name.toLowerCase() === name.toLowerCase());
-      if (p) return enterAs(p.id);
-    }
     err.textContent = 'No se pudo crear el usuario.'; err.hidden = false;
   } finally { btn.disabled = false; }
 }
 
 function enterAs(id) {
   state.me = id;
-  lsSet(LS_ME, id);
+  lsSet(meKey(), id);
   $('#lobby-name').value = '';
   $('#lobby').hidden = true;
   $('#app').hidden = false;
   $('#me-name').textContent = personName(id);
   loadAvailability().catch(e => { console.error(e); toast('Error cargando el calendario'); });
-}
-
-/* ------------------------------------------------------------------ tags */
-function renderTagPicker() {
-  const sel = $('#tag-select');
-  sel.innerHTML = '';
-  for (const t of state.tags) sel.append(new Option(t.name, t.id));
-  sel.value = state.tagId ?? '';
-  const t = currentTag();
-  $('#tag-dot').style.background = t?.color ?? 'transparent';
-  document.documentElement.style.setProperty('--tag', t?.color ?? '#94a3b8');
-  sel.disabled = !state.tags.length;
-  $('#del-tag').disabled = !t;
-  $('#empty').hidden = !!state.tags.length;
-  $('#grid').hidden = !state.tags.length;
-}
-
-function openTagDialog() {
-  const box = $('#tag-colors');
-  box.innerHTML = '';
-  const used = new Set(state.tags.map(t => t.color));
-  const first = TAG_COLORS.find(c => !used.has(c)) ?? TAG_COLORS[0];
-  for (const c of TAG_COLORS) {
-    const id = 'c' + c.slice(1);
-    const input = Object.assign(document.createElement('input'), { type: 'radio', name: 'tag-color', value: c, id, checked: c === first });
-    const label = Object.assign(document.createElement('label'), { htmlFor: id, title: c });
-    label.style.background = c;
-    box.append(input, label);
-  }
-  $('#tag-name').value = '';
-  $('#tag-error').hidden = true;
-  $('#tag-dialog').showModal();
-  $('#tag-name').focus();
-}
-
-async function onTagSubmit(e) {
-  e.preventDefault();
-  const name = $('#tag-name').value.trim().replace(/\s+/g, ' ');
-  const color = document.querySelector('input[name="tag-color"]:checked')?.value ?? TAG_COLORS[0];
-  const err = $('#tag-error');
-  if (!name) return;
-  if (state.tags.some(t => t.name.toLowerCase() === name.toLowerCase())) {
-    err.textContent = 'Ya existe un tag con ese nombre.'; err.hidden = false; return;
-  }
-  try {
-    const t = await store.createTag(name, color);
-    $('#tag-dialog').close();
-    state.tagId = t.id; lsSet(LS_TAG, t.id);
-    await refreshTags();
-    await loadAvailability();
-  } catch (e2) {
-    console.error(e2);
-    err.textContent = e2?.code === '23505' ? 'Ya existe un tag con ese nombre.' : 'No se pudo crear el tag.';
-    err.hidden = false;
-  }
-}
-
-async function onDeleteTag() {
-  const t = currentTag();
-  if (!t) return;
-  const ok = await confirmDialog(`¿Borrar el tag «${t.name}»?`,
-    'Se borrará para todo el grupo, junto con toda la disponibilidad marcada con este tag.');
-  if (!ok) return;
-  try {
-    await store.deleteTag(t.id);
-    state.tagId = null; lsSet(LS_TAG, null);
-    await refreshTags();
-    await loadAvailability();
-  } catch (e) { console.error(e); toast('No se pudo borrar el tag'); }
-}
-
-function confirmDialog(title, text) {
-  const dlg = $('#confirm-dialog');
-  $('#confirm-title').textContent = title;
-  $('#confirm-text').textContent = text;
-  dlg.returnValue = '';
-  dlg.showModal();
-  return new Promise(res => dlg.addEventListener('close', () => res(dlg.returnValue === 'ok'), { once: true }));
 }
 
 /* ----------------------------------------------------------- renderizado */
@@ -369,7 +281,7 @@ function renderSide() {
 function renderDayPanel() {
   const panel = $('#day-panel');
   const day = state.selectedDay;
-  if (!day || !state.tagId) { panel.hidden = true; return; }
+  if (!day) { panel.hidden = true; return; }
   panel.hidden = false;
   const d = parseYmd(day);
   $('#day-title').textContent = `${WEEKDAYS[d.getDay()]} ${d.getDate()} de ${MONTHS[d.getMonth()]}`;
@@ -401,7 +313,6 @@ function renderDayPanel() {
 function renderBest() {
   const ol = $('#best');
   ol.replaceChildren();
-  if (!state.tagId) return;
   const { start, end } = gridRange(state.cursor);
   const today = todayYmd();
   const from = ymd(start) < today ? today : ymd(start);
@@ -418,7 +329,7 @@ function renderBest() {
   if (!top.length) {
     const li = document.createElement('li');
     li.className = 'muted plain';
-    li.textContent = 'Aún nadie ha marcado huecos con este tag.';
+    li.textContent = 'Aún nadie ha marcado huecos este mes.';
     ol.append(li);
     return;
   }
@@ -447,11 +358,9 @@ function renderPeople() {
   const ul = $('#people');
   ul.replaceChildren();
   const counts = new Map();
-  const { start, end } = gridRange(state.cursor);
   const month = state.cursor.getMonth();
   for (const [k, set] of state.avail) {
-    const day = k.split('|')[0];
-    if (day < ymd(start) || day > ymd(end) || parseYmd(day).getMonth() !== month) continue;
+    if (parseYmd(k.split('|')[0]).getMonth() !== month) continue;
     for (const id of set) counts.set(id, (counts.get(id) || 0) + 1);
   }
   for (const p of state.people) {
@@ -498,17 +407,6 @@ function wireEvents() {
   $('#lobby-select').addEventListener('change', onLobbySelect);
   $('#lobby-form').addEventListener('submit', onLobbySubmit);
   $('#switch-user').addEventListener('click', () => { state.selectedDay = null; showLobby(); });
-
-  $('#tag-select').addEventListener('change', (e) => {
-    state.tagId = e.target.value; lsSet(LS_TAG, state.tagId);
-    renderTagPicker();
-    loadAvailability();
-  });
-  $('#new-tag').addEventListener('click', openTagDialog);
-  $('#empty-new-tag').addEventListener('click', openTagDialog);
-  $('#del-tag').addEventListener('click', onDeleteTag);
-  $('#tag-form').addEventListener('submit', onTagSubmit);
-  $('#tag-cancel').addEventListener('click', () => $('#tag-dialog').close());
 
   $('#prev').addEventListener('click', () => changeMonth(-1));
   $('#next').addEventListener('click', () => changeMonth(1));

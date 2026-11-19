@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Quedadas · administración</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔑</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script type="module" src="admin.js"></script>
+</head>
+<body>
+  <!-- LOGIN -->
+  <section id="login" class="lobby">
+    <form id="login-form" class="lobby-card" autocomplete="off">
+      <div class="logo" aria-hidden="true">🔑</div>
+      <h1>Administración</h1>
+      <p class="muted">Crear, cambiar y borrar grupos.</p>
+      <label for="pw">Contraseña</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button id="login-btn" type="submit" class="btn primary wide">Entrar</button>
+      <p id="login-error" class="error" hidden></p>
+      <p class="admin-foot"><a class="back-link" href="./" hidden>← Volver al calendario</a></p>
+    </form>
+  </section>
+
+  <!-- PANEL -->
+  <main id="panel" class="admin" hidden>
+    <header class="topbar">
+      <div class="brand">🔑 Administración</div>
+      <div class="me">
+        <a class="back-link link" href="./" hidden>← Volver al calendario</a>
+        <span class="sep back-link" hidden>·</span>
+        <button id="logout" class="link" type="button">Salir</button>
+      </div>
+    </header>
+
+    <div id="default-warning" class="warn" hidden>
+      <strong>Estás usando la contraseña inicial.</strong> Cámbiala ahora aquí abajo: es pública y cualquiera podría entrar con ella.
+    </div>
+
+    <section class="panel">
+      <h3>Nuevo grupo</h3>
+      <form id="create-form" class="inline-form" autocomplete="off">
+        <input id="create-name" maxlength="60" placeholder="Nombre del grupo, p. ej. Rol de los jueves" required>
+        <button class="btn primary" type="submit">Crear grupo</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h3>Grupos</h3>
+      <p class="muted small-text">Cada grupo solo lo ve quien tiene su enlace. Si un enlace se ha compartido de más, usa «Enlace nuevo» y el anterior dejará de funcionar.</p>
+      <div id="groups" class="groups"></div>
+    </section>
+
+    <section class="panel" id="password-panel">
+      <h3>Cambiar contraseña de administrador</h3>
+      <form id="pw-form" class="stack-form" autocomplete="off">
+        <input id="pw-new" type="password" placeholder="Contraseña nueva" autocomplete="new-password" required>
+        <input id="pw-new2" type="password" placeholder="Repite la contraseña nueva" autocomplete="new-password" required>
+        <button class="btn" type="submit">Cambiar contraseña</button>
+        <p id="pw-msg" class="small-text" hidden></p>
+      </form>
+    </section>
+  </main>
+
+  <!-- Confirmación -->
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h3 id="confirm-title">¿Seguro?</h3>
+      <p id="confirm-text"></p>
+      <div class="row-btns end">
+        <button value="cancel" class="btn ghost">Cancelar</button>
+        <button value="ok" id="confirm-ok" class="btn danger-solid">Borrar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Renombrar -->
+  <dialog id="rename-dialog">
+    <form id="rename-form" method="dialog">
+      <h3>Renombrar grupo</h3>
+      <input id="rename-name" maxlength="60" required>
+      <div class="row-btns end">
+        <button value="cancel" class="btn ghost" type="button" id="rename-cancel">Cancelar</button>
+        <button value="ok" class="btn primary" type="submit">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

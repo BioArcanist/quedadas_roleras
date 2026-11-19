@@ -26,7 +26,7 @@ jobs:
       - name: Preparar web
         run: |
           mkdir -p _site/db
-          cp index.html setup.html styles.css app.js store.js setup.js config.js _site/
+          cp index.html admin.html setup.html styles.css app.js admin.js store.js setup.js config.js _site/
           cp db/schema.sql _site/db/
 
       - uses: actions/configure-pages@v5

@@ -1,30 +1,29 @@
-// Prepara el proyecto de Nhost: crea tablas (db/schema.sql), las publica en GraphQL
-// y da permisos al rol "public" (los visitantes sin login).
+// Prepara (o actualiza) el proyecto de Nhost: ejecuta db/schema.sql, publica en la API
+// solo las funciones seguras y da permiso al rol "public" (visitantes sin login) para usarlas.
 import { nhostUrls } from './store.js';
 
 const cfg = window.APP_CONFIG || {};
 const $ = (s) => document.querySelector(s);
 const log = $('#log');
 
-const PERMS = {
-  people: {
-    select: ['id', 'name'],
-    insert: ['name'],
-  },
-  tags: {
-    select: ['id', 'name', 'color', 'created_at'],
-    insert: ['name', 'color'],
-    delete: true,
-  },
-  availability: {
-    select: ['person_id', 'tag_id', 'day', 'slot'],
-    insert: ['person_id', 'tag_id', 'day', 'slot'],
-    delete: true,
-  },
-  revision: {
-    select: ['id', 'n'],
-  },
+// Tablas de la versión antigua (con tags): se dejan en la base de datos como copia,
+// pero se retiran de la API para que nadie pueda leerlas.
+const OLD_TABLES = ['people', 'tags', 'availability', 'revision'];
+
+// Tablas "forma" (vacías) que devuelven las funciones
+const SHAPES = {
+  v_group: ['id', 'name'],
+  v_member: ['id', 'name'],
+  v_slot: ['member_id', 'day', 'slot'],
+  v_rev: ['n'],
+  v_admin_group: ['id', 'name', 'code', 'members', 'created_at'],
+  v_ok: ['ok', 'is_default'],
 };
+
+const QUERY_FUNCTIONS = ['group_info', 'group_members', 'group_slots', 'group_rev',
+  'admin_check', 'admin_groups', 'admin_members'];
+const MUTATION_FUNCTIONS = ['join_group', 'set_slot', 'admin_create_group', 'admin_rename_group',
+  'admin_new_code', 'admin_delete_group', 'admin_delete_member', 'admin_change_password'];
 
 if (!cfg.nhostSubdomain || !cfg.nhostRegion) {
   $('#target').textContent = 'Falta poner el subdominio y la región de Nhost en config.js.';
@@ -69,7 +68,7 @@ async function run(secret) {
         body: JSON.stringify(body),
       });
     } catch {
-      throw new Error('No se pudo conectar con Nhost. ¿Está el proyecto encendido y el subdominio/región bien puestos?');
+      throw new Error('No se pudo conectar con Nhost. ¿Está el proyecto encendido (Live)?');
     }
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -82,65 +81,77 @@ async function run(secret) {
   }
   const meta = (type, args) => hasura('/v1/metadata', { type, args });
   const table = (name) => ({ schema: 'public', name });
+  const fn = (name) => ({ schema: 'public', name });
+  const already = (err) => /already|exists/i.test(`${err.code} ${err.message}`);
+  const detail = (err) => `(detalle: HTTP ${err.status ?? '?'} · ${err.code ?? '-'} · ${err.message})`;
 
-  // 1. Tablas
-  let li = line('Creando tablas…');
+  // 0. Comprobar la clave
+  let li = line('Comprobando la clave de Nhost…');
+  try {
+    await meta('export_metadata', {});
+  } catch (err) {
+    if (err.status === 401 || err.code === 'access-denied' || /secret|access/i.test(err.message)) {
+      throw new Error(`Nhost no acepta el Admin Secret. ${detail(err)}`);
+    }
+    throw new Error(`No se pudo hablar con Nhost ${detail(err)}`);
+  }
+  li.className = 'ok'; li.textContent = 'Clave correcta';
+
+  // 1. Retirar de la API las tablas antiguas
+  li = line('Retirando la versión antigua de la API…');
+  for (const name of OLD_TABLES) {
+    try { await meta('pg_untrack_table', { source: 'default', table: table(name), cascade: true }); } catch { /* no estaba */ }
+  }
+  li.className = 'ok'; li.textContent = 'Versión antigua retirada (los datos se conservan)';
+
+  // 2. Tablas, funciones y migración
+  li = line('Creando tablas y pasando los datos a grupos…');
   const sql = await (await fetch('db/schema.sql', { cache: 'no-store' })).text();
   try {
     await hasura('/v2/query', { type: 'run_sql', args: { source: 'default', sql, cascade: false, read_only: false } });
   } catch (err) {
-    const detail = `(detalle: HTTP ${err.status ?? '?'} · ${err.code ?? '-'} · ${err.message})`;
-    if (err.status === 401 || err.code === 'access-denied' || /invalid.*secret|x-hasura-admin-secret/i.test(err.message)) {
-      throw new Error(`Nhost no acepta el Admin Secret. ${detail}`);
-    }
-    throw new Error(`Error creando las tablas ${detail}`);
+    throw new Error(`Error creando las tablas ${detail(err)}`);
   }
-  li.className = 'ok'; li.textContent = 'Tablas creadas';
+  li.className = 'ok'; li.textContent = 'Tablas creadas y datos migrados';
 
-  // 2. Publicarlas en GraphQL
-  li = line('Publicando tablas en la API…');
-  for (const name of Object.keys(PERMS)) {
-    try {
-      await meta('pg_track_table', { source: 'default', table: table(name) });
-    } catch (err) {
-      if (!/already/i.test(err.code || '') && !/already/i.test(err.message)) throw err;
-    }
-  }
-  li.className = 'ok'; li.textContent = 'Tablas publicadas en la API';
-
-  // 3. Permisos para el rol "public" (sin login)
-  li = line('Dando permisos…');
-  for (const [name, p] of Object.entries(PERMS)) {
-    for (const kind of ['select', 'insert', 'delete']) {
-      try { await meta(`pg_drop_${kind}_permission`, { source: 'default', table: table(name), role: 'public' }); } catch { /* no existía */ }
-    }
+  // 3. Publicar las formas de respuesta y dejarlas leer (están vacías)
+  li = line('Publicando la API…');
+  for (const [name, columns] of Object.entries(SHAPES)) {
+    try { await meta('pg_track_table', { source: 'default', table: table(name) }); } catch (err) { if (!already(err)) throw new Error(`${name}: ${detail(err)}`); }
+    try { await meta('pg_drop_select_permission', { source: 'default', table: table(name), role: 'public' }); } catch { /* */ }
     await meta('pg_create_select_permission', {
       source: 'default', table: table(name), role: 'public',
-      permission: { columns: p.select, filter: {} },
+      permission: { columns, filter: {} },
     });
-    if (p.insert) {
-      await meta('pg_create_insert_permission', {
-        source: 'default', table: table(name), role: 'public',
-        permission: { columns: p.insert, check: {} },
-      });
-    }
-    if (p.delete) {
-      await meta('pg_create_delete_permission', {
-        source: 'default', table: table(name), role: 'public',
-        permission: { filter: {} },
-      });
-    }
   }
-  li.className = 'ok'; li.textContent = 'Permisos configurados';
 
-  // 4. Comprobación como un visitante normal (sin secreto)
-  li = line('Comprobando que la app puede leer…');
-  const res = await fetch(urls.graphql, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: '{ people { id } tags { id } revision_by_pk(id: 1) { n } }' }),
-  });
-  const json = await res.json();
-  if (json.errors?.length) throw new Error('La comprobación ha fallado: ' + json.errors[0].message);
-  li.className = 'ok'; li.textContent = 'Todo funciona';
+  // 4. Publicar las funciones
+  for (const name of QUERY_FUNCTIONS) {
+    try { await meta('pg_track_function', { source: 'default', function: fn(name) }); } catch (err) { if (!already(err)) throw new Error(`${name}: ${detail(err)}`); }
+  }
+  for (const name of MUTATION_FUNCTIONS) {
+    try {
+      await meta('pg_track_function', { source: 'default', function: fn(name), configuration: { exposed_as: 'mutation' } });
+    } catch (err) { if (!already(err)) throw new Error(`${name}: ${detail(err)}`); }
+  }
+  for (const name of [...QUERY_FUNCTIONS, ...MUTATION_FUNCTIONS]) {
+    try { await meta('pg_create_function_permission', { source: 'default', function: fn(name), role: 'public' }); } catch { /* ya existe o se infiere */ }
+  }
+  li.className = 'ok'; li.textContent = 'API publicada';
+
+  // 5. Comprobación como un visitante normal (sin clave)
+  li = line('Comprobando como visitante…');
+  const asPublic = async (query) => {
+    const res = await fetch(urls.graphql, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }),
+    });
+    return res.json();
+  };
+  const q = await asPublic('{ group_info(args: {p_code: "x"}) { id } admin_check(args: {p_password: "x"}) { ok } }');
+  if (q.errors?.length) throw new Error('Lectura: ' + q.errors[0].message);
+  const m = await asPublic('mutation { join_group(args: {p_code: "x", p_name: "x"}) { id } }');
+  if (m.errors?.length) throw new Error('Escritura: ' + m.errors[0].message);
+  const leak = await asPublic('{ people { id } }');
+  if (!leak.errors?.length) throw new Error('Las tablas antiguas siguen siendo visibles; vuelve a ejecutar la preparación.');
+  li.className = 'ok'; li.textContent = 'Todo funciona y los datos están protegidos';
 }

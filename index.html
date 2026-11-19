@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
   <title>Quedadas · calendario de amigos</title>
   <meta name="theme-color" content="#0f766e">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
@@ -13,11 +14,21 @@
 <body>
   <div id="loading" class="loading">Cargando…</div>
 
+  <!-- SIN ENLACE / ENLACE NO VÁLIDO -->
+  <section id="gate" class="lobby" hidden>
+    <div class="lobby-card">
+      <div class="logo" aria-hidden="true">🔒</div>
+      <h1 id="gate-title">Necesitas un enlace</h1>
+      <p id="gate-text" class="muted">Para entrar necesitas el enlace de tu grupo. Pídeselo a quien organiza.</p>
+      <p class="admin-foot"><a id="gate-admin" href="admin.html">Modo administrador</a></p>
+    </div>
+  </section>
+
   <!-- LOBBY -->
   <section id="lobby" class="lobby" hidden>
     <form id="lobby-form" class="lobby-card" autocomplete="off">
       <div class="logo" aria-hidden="true">📅</div>
-      <h1>Quedadas</h1>
+      <h1 class="group-name"></h1>
       <p class="muted">Calendario compartido de disponibilidad</p>
 
       <label for="lobby-select">¿Quién eres?</label>
@@ -30,27 +41,21 @@
 
       <button id="lobby-enter" type="submit" class="btn primary wide">Entrar</button>
       <p id="lobby-error" class="error" hidden></p>
-      <p id="mode-note" class="note" hidden></p>
+      <p class="admin-foot"><a class="admin-link" href="admin.html">Modo administrador</a></p>
     </form>
   </section>
 
   <!-- APP -->
   <main id="app" hidden>
     <header class="topbar">
-      <div class="brand">📅 Quedadas</div>
-      <div class="me">Eres <strong id="me-name"></strong> <button id="switch-user" class="link" type="button">Cambiar</button></div>
+      <div class="brand">📅 <span class="group-name"></span></div>
+      <div class="me">
+        Eres <strong id="me-name"></strong> <button id="switch-user" class="link" type="button">Cambiar</button>
+        <span class="sep">·</span> <a class="admin-link link" href="admin.html">Admin</a>
+      </div>
     </header>
 
     <section class="toolbar">
-      <div class="tag-picker">
-        <label for="tag-select">Tag</label>
-        <div class="tag-select-wrap">
-          <span class="tag-dot" id="tag-dot"></span>
-          <select id="tag-select"></select>
-        </div>
-        <button id="new-tag" class="btn" type="button">＋ Nuevo tag</button>
-        <button id="del-tag" class="btn ghost danger" type="button" title="Borrar este tag">Borrar</button>
-      </div>
       <div class="month-nav">
         <button id="prev" class="btn icon" type="button" aria-label="Mes anterior">‹</button>
         <h2 id="month-label"></h2>
@@ -72,11 +77,6 @@
           <span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span><span>Dom</span>
         </div>
         <div id="grid" class="grid"></div>
-        <div id="empty" class="empty" hidden>
-          <p>Todavía no hay ningún tag.</p>
-          <p>Crea uno (por ejemplo <em>Cena</em>, <em>Escapada</em> o <em>Partida</em>) para empezar a marcar disponibilidad.</p>
-          <button id="empty-new-tag" class="btn primary" type="button">＋ Crear tag</button>
-        </div>
       </div>
 
       <aside class="side">
@@ -99,34 +99,6 @@
       </aside>
     </div>
   </main>
-
-  <!-- Nuevo tag -->
-  <dialog id="tag-dialog">
-    <form id="tag-form" method="dialog">
-      <h3>Nuevo tag</h3>
-      <label for="tag-name">Nombre</label>
-      <input id="tag-name" maxlength="30" placeholder="p. ej. Cena de Navidad" required>
-      <label>Color</label>
-      <div id="tag-colors" class="swatches"></div>
-      <p id="tag-error" class="error" hidden></p>
-      <div class="row-btns end">
-        <button value="cancel" class="btn ghost" type="button" id="tag-cancel">Cancelar</button>
-        <button value="ok" class="btn primary" type="submit">Crear</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Confirmación -->
-  <dialog id="confirm-dialog">
-    <form method="dialog">
-      <h3 id="confirm-title">¿Seguro?</h3>
-      <p id="confirm-text"></p>
-      <div class="row-btns end">
-        <button value="cancel" class="btn ghost">Cancelar</button>
-        <button value="ok" class="btn danger-solid">Borrar</button>
-      </div>
-    </form>
-  </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>
 </body>

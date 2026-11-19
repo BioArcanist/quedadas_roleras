@@ -1,12 +1,6 @@
-// Capa de datos: Nhost (compartido entre amigos) o localStorage (modo demo).
+// Acceso a datos en Nhost. Todo pasa por funciones de la base de datos que exigen
+// el código del grupo (enlace) o la contraseña de admin.
 export const SLOTS = ['manana', 'tarde', 'noche'];
-
-export async function createStore(config = {}) {
-  if (config.nhostSubdomain && config.nhostRegion) {
-    return nhostStore(config.nhostSubdomain, config.nhostRegion);
-  }
-  return localStore();
-}
 
 export function nhostUrls(subdomain, region) {
   return {
@@ -16,9 +10,11 @@ export function nhostUrls(subdomain, region) {
   };
 }
 
-/* ------------------------------------------------------------------- Nhost */
-function nhostStore(subdomain, region) {
-  const urls = nhostUrls(subdomain, region);
+export function createStore(config = window.APP_CONFIG || {}) {
+  if (!config.nhostSubdomain || !config.nhostRegion) {
+    throw new Error('Falta configurar Nhost en config.js');
+  }
+  const urls = nhostUrls(config.nhostSubdomain, config.nhostRegion);
 
   async function gql(query, variables = {}) {
     const res = await fetch(urls.graphql, {
@@ -28,166 +24,117 @@ function nhostStore(subdomain, region) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    if (json.errors?.length) {
-      const e = json.errors[0];
-      const err = new Error(e.message);
-      const code = e.extensions?.code;
-      err.code = code === 'constraint-violation' && /unique|duplicate/i.test(e.message) ? '23505' : code;
-      throw err;
-    }
+    if (json.errors?.length) throw new Error(json.errors[0].message);
     return json.data;
   }
 
   return {
-    mode: 'nhost',
-
-    async listPeople() {
-      return (await gql('query { people(order_by: {name: asc}) { id name } }')).people;
+    /* ---------------------------------------------------------- grupo */
+    async getGroup(code) {
+      const d = await gql('query ($c: String!) { group_info(args: {p_code: $c}) { id name } }', { c: code });
+      return d.group_info[0] ?? null;
     },
-    async createPerson(name) {
-      return (await gql('mutation ($name: String!) { insert_people_one(object: {name: $name}) { id name } }',
-        { name })).insert_people_one;
+    async listMembers(code) {
+      const d = await gql('query ($c: String!) { group_members(args: {p_code: $c}) { id name } }', { c: code });
+      return d.group_members;
     },
-
-    async listTags() {
-      return (await gql('query { tags(order_by: {created_at: asc}) { id name color } }')).tags;
+    async join(code, name) {
+      const d = await gql('mutation ($c: String!, $n: String!) { join_group(args: {p_code: $c, p_name: $n}) { id name } }',
+        { c: code, n: name });
+      if (!d.join_group[0]) throw new Error('No se pudo entrar en el grupo');
+      return d.join_group[0];
     },
-    async createTag(name, color) {
-      return (await gql('mutation ($name: String!, $color: String!) { insert_tags_one(object: {name: $name, color: $color}) { id name color } }',
-        { name, color })).insert_tags_one;
+    async listSlots(code, from, to) {
+      const d = await gql(`query ($c: String!, $f: date!, $t: date!) {
+        group_slots(args: {p_code: $c, p_from: $f, p_to: $t}) { member_id day slot }
+      }`, { c: code, f: from, t: to });
+      return d.group_slots;
     },
-    async deleteTag(id) {
-      await gql('mutation ($id: uuid!) { delete_tags_by_pk(id: $id) { id } }', { id });
-    },
-
-    async listAvailability(tagId, fromDay, toDay) {
-      return (await gql(`query ($tag: uuid!, $from: date!, $to: date!) {
-        availability(where: {tag_id: {_eq: $tag}, day: {_gte: $from, _lte: $to}}) { person_id day slot }
-      }`, { tag: tagId, from: fromDay, to: toDay })).availability;
-    },
-    async setSlot(personId, tagId, day, slot, available) {
-      const v = { p: personId, t: tagId, d: day, s: slot };
-      if (available) {
-        try {
-          await gql(`mutation ($p: uuid!, $t: uuid!, $d: date!, $s: String!) {
-            insert_availability_one(object: {person_id: $p, tag_id: $t, day: $d, slot: $s}) { slot }
-          }`, v);
-        } catch (e) {
-          if (e.code !== '23505') throw e; // ya estaba marcado: no pasa nada
-        }
-      } else {
-        await gql(`mutation ($p: uuid!, $t: uuid!, $d: date!, $s: String!) {
-          delete_availability(where: {person_id: {_eq: $p}, tag_id: {_eq: $t}, day: {_eq: $d}, slot: {_eq: $s}}) { affected_rows }
-        }`, v);
-      }
+    async setSlot(code, memberId, day, slot, available) {
+      const d = await gql(`mutation ($c: String!, $m: uuid!, $d: date!, $s: String!, $a: Boolean!) {
+        set_slot(args: {p_code: $c, p_member: $m, p_day: $d, p_slot: $s, p_available: $a}) { member_id }
+      }`, { c: code, m: memberId, d: day, s: slot, a: available });
+      if (!d.set_slot.length) throw new Error('No autorizado');
     },
 
-    // Tiempo real: una suscripción a un contador que sube con cada cambio.
-    // Si el websocket falla, se recarga cada 30 s y al volver a la pestaña.
-    subscribe(cb) {
-      const all = () => { cb('people'); cb('tags'); cb('availability'); };
+    // Tiempo real: suscripción al contador de cambios del grupo.
+    // Respaldo: recarga cada 30 s y al volver a la pestaña.
+    subscribe(code, cb) {
       let lastN = null;
       let retry = 1000;
-
       const connect = () => {
         let ws;
         try { ws = new WebSocket(urls.graphqlWs, 'graphql-ws'); } catch { return; }
-        ws.onopen = () => {
-          retry = 1000;
-          ws.send(JSON.stringify({ type: 'connection_init', payload: {} }));
-        };
+        ws.onopen = () => { retry = 1000; ws.send(JSON.stringify({ type: 'connection_init', payload: {} })); };
         ws.onmessage = (ev) => {
           let msg; try { msg = JSON.parse(ev.data); } catch { return; }
           if (msg.type === 'connection_ack') {
             ws.send(JSON.stringify({
               id: '1', type: 'start',
-              payload: { query: 'subscription { revision_by_pk(id: 1) { n } }' },
+              payload: {
+                query: 'subscription ($c: String!) { group_rev(args: {p_code: $c}) { n } }',
+                variables: { c: code },
+              },
             }));
           } else if (msg.type === 'data') {
-            const n = msg.payload?.data?.revision_by_pk?.n;
+            const n = msg.payload?.data?.group_rev?.[0]?.n;
             if (n == null) return;
-            if (lastN !== null && n !== lastN) all();
+            if (lastN !== null && n !== lastN) cb();
             lastN = n;
           }
         };
-        ws.onclose = () => {
-          setTimeout(connect, retry);
-          retry = Math.min(retry * 2, 30000);
-        };
+        ws.onclose = () => { setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); };
       };
       connect();
-
-      setInterval(() => { if (!document.hidden) all(); }, 30000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) all(); });
-    },
-  };
-}
-
-
-/* ---------------------------------------------------------- Demo (local) */
-function localStore() {
-  const KEY = 'quedadas.demo.v1';
-  const empty = () => ({ people: [], tags: [], avail: {} });
-  const load = () => {
-    try { return JSON.parse(localStorage.getItem(KEY)) || empty(); } catch { return empty(); }
-  };
-  let bc = null;
-  try { bc = new BroadcastChannel('quedadas-demo'); } catch { /* sin soporte */ }
-  const save = (db, kind) => {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* lleno o bloqueado */ }
-    bc?.postMessage(kind);
-  };
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2) + Date.now().toString(36));
-  const dup = (msg) => Object.assign(new Error(msg), { code: '23505' });
-
-  return {
-    mode: 'local',
-
-    async listPeople() {
-      return load().people.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
-    },
-    async createPerson(name) {
-      const db = load();
-      if (db.people.some(p => p.name.toLowerCase() === name.toLowerCase())) throw dup('Ya existe');
-      const p = { id: uid(), name };
-      db.people.push(p); save(db, 'people');
-      return p;
+      setInterval(() => { if (!document.hidden) cb(); }, 30000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) cb(); });
     },
 
-    async listTags() { return load().tags; },
-    async createTag(name, color) {
-      const db = load();
-      if (db.tags.some(t => t.name.toLowerCase() === name.toLowerCase())) throw dup('Ya existe');
-      const t = { id: uid(), name, color };
-      db.tags.push(t); save(db, 'tags');
-      return t;
+    /* ---------------------------------------------------------- admin */
+    async adminCheck(pw) {
+      const d = await gql('query ($p: String!) { admin_check(args: {p_password: $p}) { ok is_default } }', { p: pw });
+      return d.admin_check[0] ?? null; // null = contraseña incorrecta
     },
-    async deleteTag(id) {
-      const db = load();
-      db.tags = db.tags.filter(t => t.id !== id);
-      for (const k of Object.keys(db.avail)) if (k.split('|')[1] === id) delete db.avail[k];
-      save(db, 'tags');
+    async adminGroups(pw) {
+      const d = await gql('query ($p: String!) { admin_groups(args: {p_password: $p}) { id name code members created_at } }', { p: pw });
+      return d.admin_groups;
     },
-
-    async listAvailability(tagId, fromDay, toDay) {
-      const out = [];
-      for (const k of Object.keys(load().avail)) {
-        const [person_id, tag_id, day, slot] = k.split('|');
-        if (tag_id === tagId && day >= fromDay && day <= toDay) out.push({ person_id, day, slot });
-      }
-      return out;
+    async adminMembers(pw, groupId) {
+      const d = await gql('query ($p: String!, $g: uuid!) { admin_members(args: {p_password: $p, p_group: $g}) { id name } }',
+        { p: pw, g: groupId });
+      return d.admin_members;
     },
-    async setSlot(personId, tagId, day, slot, available) {
-      const db = load();
-      const k = [personId, tagId, day, slot].join('|');
-      if (available) db.avail[k] = 1; else delete db.avail[k];
-      save(db, 'availability');
+    async adminCreateGroup(pw, name) {
+      const d = await gql('mutation ($p: String!, $n: String!) { admin_create_group(args: {p_password: $p, p_name: $n}) { id name code members created_at } }',
+        { p: pw, n: name });
+      if (!d.admin_create_group[0]) throw new Error('No se pudo crear el grupo');
+      return d.admin_create_group[0];
     },
-
-    subscribe(cb) {
-      bc?.addEventListener('message', e => cb(e.data));
-      window.addEventListener('storage', e => { if (e.key === KEY) { cb('people'); cb('tags'); } });
+    async adminRenameGroup(pw, id, name) {
+      const d = await gql('mutation ($p: String!, $g: uuid!, $n: String!) { admin_rename_group(args: {p_password: $p, p_group: $g, p_name: $n}) { id } }',
+        { p: pw, g: id, n: name });
+      if (!d.admin_rename_group[0]) throw new Error('No se pudo renombrar');
+    },
+    async adminNewCode(pw, id) {
+      const d = await gql('mutation ($p: String!, $g: uuid!) { admin_new_code(args: {p_password: $p, p_group: $g}) { id } }',
+        { p: pw, g: id });
+      if (!d.admin_new_code[0]) throw new Error('No se pudo cambiar el enlace');
+    },
+    async adminDeleteGroup(pw, id) {
+      const d = await gql('mutation ($p: String!, $g: uuid!) { admin_delete_group(args: {p_password: $p, p_group: $g}) { id } }',
+        { p: pw, g: id });
+      if (!d.admin_delete_group[0]) throw new Error('No se pudo borrar el grupo');
+    },
+    async adminDeleteMember(pw, id) {
+      const d = await gql('mutation ($p: String!, $m: uuid!) { admin_delete_member(args: {p_password: $p, p_member: $m}) { id } }',
+        { p: pw, m: id });
+      if (!d.admin_delete_member[0]) throw new Error('No se pudo borrar la persona');
+    },
+    async adminChangePassword(pw, newPw) {
+      const d = await gql('mutation ($p: String!, $n: String!) { admin_change_password(args: {p_password: $p, p_new: $n}) { ok is_default } }',
+        { p: pw, n: newPw });
+      if (!d.admin_change_password[0]) throw new Error('No se pudo cambiar la contraseña');
+      return d.admin_change_password[0];
     },
   };
 }
