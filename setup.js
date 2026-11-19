@@ -89,10 +89,11 @@ async function run(secret) {
   try {
     await hasura('/v2/query', { type: 'run_sql', args: { source: 'default', sql, cascade: false, read_only: false } });
   } catch (err) {
+    const detail = `(detalle: HTTP ${err.status ?? '?'} · ${err.code ?? '-'} · ${err.message})`;
     if (err.status === 401 || err.code === 'access-denied' || /invalid.*secret|x-hasura-admin-secret/i.test(err.message)) {
-      throw new Error('El Admin Secret no es correcto. Cópialo otra vez desde Nhost.');
+      throw new Error(`Nhost no acepta el Admin Secret. ${detail}`);
     }
-    throw err;
+    throw new Error(`Error creando las tablas ${detail}`);
   }
   li.className = 'ok'; li.textContent = 'Tablas creadas';
 
